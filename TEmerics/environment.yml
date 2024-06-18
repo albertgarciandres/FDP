@@ -1,0 +1,8 @@
+name: TEmerics
+channels:
+   - conda-forge
+   - bioconda
+dependencies:
+  - graphviz=7.1.0
+  - snakemake=7.24.0
+  - python=3.9.16
