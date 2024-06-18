@@ -1,0 +1,112 @@
+###############################################################################
+### Input files
+###############################################################################
+#
+# All the paths in this section must be relative to the directory the pipeline
+# is going to be ran. This section is mandatory
+#
+
+# Samples table
+samples: path/to/samples_table.tsv
+
+#### Genome Resources ####
+
+# Reference genome
+ref_genome: path/to/reference_genome.fasta
+# Gene annotations
+ref_anno: path/to/gene_annotations.gtf
+# TE library
+te_lib: path/to/te_library.fasta
+
+
+###############################################################################
+### Workflow directories (Optional)
+###############################################################################
+#
+# All the paths in this section must be relative to the directory the pipeline
+# is going to be ran.
+#
+out_dir: results/
+scripts_dir: ../scripts/
+stats_dir: results/stats/
+
+local_log: logs/local/
+cluster_log: logas/cluster/
+
+
+###############################################################################
+### Workflow parameters (Optional)
+###############################################################################
+#
+# All the modifications made to the values on this section modify the pipeline
+# behavior and output. Please, make sure you know what they are before changing
+# them.
+#
+
+# Obtain workflow statistics. See README.md for more information.
+# Set to 1 to retrieve the data
+get_stats: 0
+
+#### fastp ####
+#
+# Raw read filtering Parameters
+# More information in: https://github.com/OpenGene/fastp?tab=readme-ov-file#all-options
+#
+min_read_len: 20 # minimum read length to be kept
+min_qual_val_per_base: 20 # minimum quality value for base allowed
+
+#### StringTie ####
+#
+# More information in: http://ccb.jhu.edu/software/stringtie/index.shtml?t=manual
+#
+min_read_cov: 1.5 # minimum read coverage for predicted transcripts
+min_gap: 51 # minimum locus gap allowed between read mappings
+min_iso_abundance: 0.016 # minimum isoform abundance as a fraction of the
+                         # most abundant assembled transcript
+min_spliced_reads: 2 # minimum spliced reads that align across a junction
+min_bp_around: 15 # minimum number of bases (on both sides) spliced reads
+                  # align with across a junction 
+max_multimappers: 0.95 # maximum fraction of multiple-location-mapped reads
+                       # at a given locus
+#
+# StringTie Merge
+#
+min_fpkm: 0 # minimum input transcript FPKM
+min_tpm: 10 # minimum input transcript TPM
+
+#### BLAST ####
+#
+# blastn de novo against guided assembly transcriptome
+# blastn chimeric results
+#
+# More information in: https://www.ncbi.nlm.nih.gov/books/NBK279684/
+#
+e_val_assembly: 1e-20 # minimum expected value (E) for saving hits
+e_val_chimerics: 1e-10 # minim expected value (E) for saving hits
+max_target_seqs: 1 # maximum number of aligned sequences to keep
+
+#### RepeatMasker ####
+#
+# Masking repeats options.
+# More information in: https://www.animalgenome.org/bioinfo/resources/manuals/RepeatMasker.html
+
+# Cutoff score for masking repeats
+#
+# NOTE: As using a local library, lowering the cutoff below 200 will
+# usually start to give you significant numbers of false matches, raising it
+# to 250 will guarantee that all matches are real. Note that low complexity
+# regions in otherwise complex repeat sequences in your library are most
+# likely to give false matches.
+cutoff: 250
+
+#### Tandem Repeats Finder (TRF) ####
+#
+# More information in the "Program Parameters" section at: https://tandem.bu.edu/trf/help
+# 
+match_weight: 2 # match weight in Smith-Waterman style local alignment
+mm_weigth: 3 # mismatch weight in Smith-Waterman style local alignment
+indel_weigth: 5 # InDel weight in Smith-Waterman style local alignment
+PM: 80 # match probability
+PI: 10 # InDel probability
+min_score: 20 # minimum alignment score to report a tandem repeat alignment 
+max_period: 15 # maximum period size (best guess at the pattern size range upper value) 
