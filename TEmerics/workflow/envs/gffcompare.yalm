@@ -1,0 +1,6 @@
+---
+channels:
+  - bioconda
+dependencies:
+  - gffcompare>=0.12.6
+...

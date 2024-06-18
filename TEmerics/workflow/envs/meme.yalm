@@ -1,0 +1,6 @@
+---
+channels:
+  - bioconda
+dependencies:
+  - meme>=5.5.5
+...

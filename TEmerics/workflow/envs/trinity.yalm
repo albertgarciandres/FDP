@@ -1,0 +1,6 @@
+---
+channels:
+  - bioconda
+dependencies:
+  - trinity>=2.15.1
+...
