@@ -1,0 +1,479 @@
+---
+title: "Identity script"
+author: "A. Garcia Andrés"
+date: "`r Sys.Date()`"
+output: 
+  html_document: 
+    highlight: tango
+    theme: cosmo
+---
+
+```{r setup, include=FALSE, message=F}
+knitr::opts_chunk$set(echo = TRUE)
+library("bedtoolsr")
+library("dplyr")
+library("rtracklayer")
+library("tibble")
+```
+
+## Input Format
+
+The input is a `.blastn` file following the **standard 6 format** with the
+following fields:
+
+1. `qsedid` query or source (gene) sequence id
+2. `sseqid` subject or target (reference genome) sequence id
+3. `pident` percentage of identical positions
+4. `length` alignment length (sequence overlap)
+5. `mismatch` number of mismatches
+6. `gapopen` number of gap openings
+7. `qstart` start of alignment in query
+8. `qend` end of alignment in query
+9. `sstart` start of alignment in subject
+10. `send` end of alignment in subject
+11. `evalue`  expect value
+12. `bitscore`  bit score
+
+
+The command to generate this file is the following:
+
+```{bash blastn, eval=F}
+blastn -query "file.fasta"
+       -db "custom_db.fasta"
+       -out "file.blastn"
+       -outfmt 6
+       -evalue 1e-10
+       -num_threads 4
+```
+
+In addition, this script assumes that the results are already filtered
+according to the length and SCov, that the reference gene ID is added as the 
+third field (both using the in-house script `calculate_percentage.R`), and only
+unique transcript-geneID combinations are to be found.
+
+For an easiest manipulation, the input table is provided with a name for each
+of its fields corresponding to the names in the list above.
+
+```{r input_prep}
+in_file <- "/home/deliablue/Downloads/chimerics.filterLengthMin100.filterScovMin80.blastn"
+in_tbl <- read.table(in_file)
+in_tbl <- in_tbl %>% select(1, 3, 4, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16)
+colnames(in_tbl) <- c("qseqid", "sseqid", "ref_gene_ID", "pident", "length",
+                      "mismatch", "gapopen", "qstart", "qend", "sstart",
+                      "send", "evalue", "bitscore")
+
+```
+
+Another input file required is the reference annotation gtf. To read it and
+work with it the package `rtracklayer`` is used.
+
+```{r readgtf}
+in_gtf_file <- "/home/deliablue/Downloads/dmel.gtf"
+in_gtf <- import(in_gtf_file, format="gtf")
+in_gtf <- in_gtf[in_gtf$type == "gene"]
+```
+
+## Output Format
+
+This script creates a table with the following fields:
+
+1. `Transcript_name` Name of the read transcript as provided by Trinity 
+2. `Transcript_ID` Reference transcript ID as provided by StringTie
+3. `num_hits` Number of genomic locations/blast hits for _that_ transcript
+4. `Gene_ID` Reference gene (combination) ID(s) as provided by StringTie 
+5. `Distance` Distance in base pairs between the transcript and the gene(s)
+6. `Status` Category that defines that match. The different status are:
+  - `Ok` Only one single match for the transcript 
+  - `Duplicated_gene` Only one match for the transcript but appears multiple
+  times in the dataset.
+  - `Diff_chr` Multiple matches for the transcript and they are located on
+  different chromosomes
+  - `Same_chr_away` Multiple matches for the transcript on the same chromosome
+  but are located far apart from each other
+  - `Same_chr_pervasive` Multiple matches for the transcript on the same
+  chromosome and are widespread along the chromosome
+  - `Too_many_combinations` There are too many potential matches for a
+  transcript
+  
+```{r init out_tbl}
+out_tbl <- tibble(
+  transcript_name = character(),
+  transcript_ID = character(),
+  gene_ID = character(),
+  num_hits = numeric(),
+  distance = numeric(),
+  status = character()
+)
+```
+
+
+## Step by Step
+
+Kowing that the classification is done _per_ transcript, the first thing to do
+is to identify the unique transcripts in the input table.
+
+```{r trans_id}
+trans_ids <- unique(in_tbl$qseqid)
+```
+
+### One-hit Transcripts
+
+Now, transcripts with a single hit are directly add to the output table.
+
+```{r find one-hit transcripts}
+one_hit_trans <- in_tbl %>% 
+  count(qseqid) %>%
+  filter(n == 1) %>%
+  pull(qseqid)
+
+# Remove on-hit transcripts from ID list
+trans_ids <- trans_ids[!trans_ids %in% one_hit_trans]
+
+# Create entries in output table
+for (trans in one_hit_trans){
+  trans_entry = in_tbl[in_tbl$qseqid == trans,]
+  
+  out_tbl <- out_tbl %>%
+    add_row(tibble_row(transcript_name = trans_entry$qseqid,
+                       transcript_ID = trans_entry$sseqid,
+                       gene_ID = trans_entry$ref_gene_ID,
+                       num_hits = 1,
+                       distance = NA,
+                       status = "ok"))
+}
+
+# filter input table to keep transcripts with more than 1 entry
+in_tbl <- in_tbl[in_tbl$qseqid %in% trans_ids,]
+```
+
+### Merging with custom bedops
+
+The rest of transcripts are processed using a custom implementation of 
+`bedmap --count`. This function merges overlapping features into a single entry.
+To do so, only four fields from the input table are required: `qseqid`,
+`qstart`, `qend` and `ref_gene_ID`. In addition, the minimum coverage of two
+genes to be merged is set to 0.8; that is, geneA has to overlap 80% of geneB and
+geneB has to overlap geneA to be merged. (MAYBE let the end-user to choose) 
+
+From the resulting merged table, transcripts with a single entry are directly
+written to the final table, and the rest of entries are blend into a single one.
+
+```{r function_bedmap}
+merge_overlap <- function(df, frac_overlap){
+  genes <- list()
+  for (n in df$ref_gene_ID){
+    genes[[n]] <- n
+  }
+  
+  for (i in seq(1,nrow(df))){
+    main_len <- df$qend[i] - df$qstart[i]
+    j <- i + 1
+
+    while (j <= nrow(df) && df$qstart[j] < df$qend[i]) {
+      current_len <- df$qend[j] - df$qstart[j]
+      
+      st_offset_1 <- max(df$qstart[j] - df$qstart[i], 0)
+      st_offset_2 <- max(df$qstart[i] - df$qstart[j], 0)
+      end_offset_1 <- max(df$qend[i] - df$qend[j], 0)
+      end_offset_2 <- max(df$qend[j] - df$qend[i], 0)
+      
+      cov_1 <- (main_len - st_offset_1 - end_offset_1) / main_len
+      cov_2 <- (current_len - st_offset_2 - end_offset_2) / current_len
+      
+      if (cov_1 >= frac_overlap && cov_2 >= frac_overlap) {
+        genes[[df$ref_gene_ID[i]]] <- append(genes[[df$ref_gene_ID[i]]],
+                                            df$ref_gene_ID[j])
+        genes[[df$ref_gene_ID[j]]] <- append(genes[[df$ref_gene_ID[j]]],
+                                            df$ref_gene_ID[i])
+      }
+      j <- j + 1
+    }
+  }
+  merge_tbl <- tibble(seqid = character(),
+                      start = numeric(),
+                      end = numeric(),
+                      ref_gene_ID = character())
+
+  for (n in names(genes)){
+    merge_tbl <- merge_tbl %>% 
+      add_row(tibble_row(seqid = df[1,1],
+                         start = min(df[df$ref_gene_ID %in% genes[[n]],]$qstart),
+                         end = max(df[df$ref_gene_ID %in% genes[[n]],]$qend),
+                         ref_gene_ID = paste(sort(genes[[n]]), collapse = ";")))
+  }
+  return(distinct_all(merge_tbl))
+}
+
+```
+
+```{r create merge_tbl}
+# Select required fields
+to_merge <- in_tbl %>% 
+  select(qseqid, qstart, qend, ref_gene_ID) %>%
+  arrange(qseqid, qstart)
+# Initialize final merged table and one-hit transcript vector
+merge_tbl <- tibble(seqid = character(),
+                    start = numeric(),
+                    end = numeric(),
+                    ref_gene_ID = character())
+one_hit_trans <- c()
+
+# Apply custom function 
+for (trn in trans_ids){
+  # Select _per_ transcript entries
+  tbl <- merge_overlap(df = to_merge[to_merge$qseqid == trn,],
+                       frac_overlap = 0.8)
+  if (nrow(tbl) == 1){
+      out_tbl <- out_tbl %>%
+        add_row(tibble_row(transcript_name = trn,
+                           # Use trinity results to avoid multiple FBtr?
+                           transcript_ID = paste(in_tbl[in_tbl$qseqid == trn,]$sseqid, collapse = ";"), 
+                           gene_ID = tbl$ref_gene_ID,
+                           num_hits = 1,
+                           distance = NA,
+                           status = "duplicated_gene"))
+      one_hit_trans <- c(one_hit_trans, trn)
+  } else {
+    # Blend the result to the final merged table
+    merge_tbl <- rbind(merge_tbl, tbl)
+  }
+}
+
+# filter input table and transcript list to keep transcripts with +1 entry
+trans_ids <- trans_ids[!trans_ids %in% one_hit_trans]
+in_tbl <- in_tbl[in_tbl$qseqid %in% trans_ids,]
+```
+
+### Classify Hits vs Merged
+
+```{r classify per hits/merged}
+# Create counts table
+hits <- in_tbl %>%
+  count(qseqid) %>%
+  dplyr::rename(hits_count = n)
+
+merged <- merge_tbl %>%
+  count(seqid) %>%
+  dplyr::rename(merge_count = n, qseqid = seqid)
+
+counts_tbl <- hits %>% full_join(merged, by="qseqid")
+
+# Classify according to hits vs merged
+more_hits <- c()
+more_merged <- c()
+
+for (i in seq(1, nrow(counts_tbl))){
+  if (counts_tbl$merge_count[i] < counts_tbl$hits_count[i]){
+    more_hits <- c(more_hits, counts_tbl$qseqid[i])
+  } else {
+    more_merged <- c(more_merged, counts_tbl$qseqid[i])
+  }
+}
+```
+
+### More Merged Entries than blastN Entries
+
+If the number of entries in the merged table is $\ge$ the entries in the
+input table, the following _per_ transcript process is done:
+
+1. Retrieve the list of identified genes starting with the prefix `ID=`
+2. Filter reference annotation file with that list
+3. Remove all the other attributes
+4. Convert the gtf to a BED file
+5. Compute distance table using BEDtools closest
+
+```{r function per_trans}
+per_trans_bt_closest <- function(transcript, bed_file, in_tbl, out_tbl){
+
+  # Use BEDtools closest
+  bed_closest <- bt.closest(bed_file, bed_file, d = TRUE , N = TRUE)
+  fields <-c("chr", "start", "end", "geneID", "score", "strand")
+  fields <- apply(expand.grid(fields, c("A", "B")), 1, paste, collapse = "_")
+  colnames(bed_closest) <- c(fields, "distance")
+  
+  ref_ID <- paste(in_tbl$sseqid, collapse = ";")
+  matches <- nrow(in_tbl)
+
+  # Classify transcript and write entry
+  if (length(unique(bed_closest$chr_A)) > 1){
+    out_tbl <- out_tbl %>%
+      add_row(tibble_row(transcript_name = transcript,
+                         transcript_ID = ref_ID, 
+                         gene_ID = NA,
+                         num_hits = matches,
+                         distance = NA,
+                         status = "diff_chr"))
+    
+  } else {
+    for (i in seq(1:nrow(bed_closest))) {
+      distance <- bed_closest$distance[i]
+      gene <- bed_closest$geneID_A[i]
+      dist <- bed_closest$distance[i]
+      if (distance > 2000){
+        status <- "same_chr_away"
+      } else if (distance > -1) {
+        status <- "same_chr_pervasive"
+      } else {
+        next
+      }
+      out_tbl <- out_tbl %>%
+        add_row(tibble_row(transcript_name = transcript,
+                           transcript_ID = ref_ID,
+                           gene_ID = gene,
+                           num_hits = matches,
+                           distance = dist,
+                           status = status))
+    }
+  }
+  return(out_tbl)
+}
+```
+
+```{r write_out no combs}
+for (trn in more_merged){
+  
+  tmp_tbl <- tibble(transcript_name = character(),
+                    transcript_ID = character(),
+                    gene_ID = character(),
+                    num_hits = numeric(),
+                    distance = numeric(),
+                    status = character())
+
+  # Retrieve genes and filter GTF
+  genes <- unique(in_tbl[in_tbl$qseqid == trn,]$ref_gene_ID)
+  gtf_filt <- in_gtf[in_gtf$gene_id %in% genes]
+
+  # Create pseudo-BED file
+  bed_file <- as.data.frame(gtf_filt) %>%
+    select(seqnames, start, end, gene_id, score, strand) %>%
+    mutate(across(score, as.character)) %>%
+    mutate_if(is.character, ~replace(., is.na(.), "·")) %>%
+    arrange(seqnames, start)
+  
+  out_tbl <- rbind(out_tbl,
+                   per_trans_bt_closest(transcript = trn,
+                                        bed_file = bed_file,
+                                        in_tbl = in_tbl[in_tbl$qseqid == trn,],
+                                        out_tbl = tmp_tbl))
+}
+```
+
+
+
+### More blastN Entries than Merged Entries
+
+If the number of entries in the merged table is $\lt$ the entries in the
+input table, the following _per_ transcript process is done:
+
+1. Create combinations
+
+if $\gt$ 200 combinations, the entry is written to the output table.
+if only two gene lists to be combined, then:
+
+2. Retrieve the list of identified genes starting with the prefix `ID=`
+3. Filter reference annotation file with that list
+4. Remove all the other attributes
+5. Convert the gtf to a BED file
+6. Compute distance table using BEDtools closest
+7. Create "combination.lst"
+
+```{r function per_comb}
+per_comb_bt_closest <- function(transcript, combination, bed_file, in_tbl, out_tbl){
+
+  # Use BEDtools closest
+  bed_closest <- bt.closest(bed_file, bed_file, d = TRUE , N = TRUE)
+  fields <-c("chr", "start", "end", "geneID", "score", "strand")
+  fields <- apply(expand.grid(fields, c("A", "B")), 1, paste, collapse = "_")
+  colnames(bed_closest) <- c(fields, "distance")
+  
+  ref_ID <- paste(in_tbl$sseqid, collapse = ";")
+  matches <- nrow(in_tbl)
+  gene <- paste(combination, collapse = "-")
+
+  # Classify transcript and write entry
+  if (length(unique(bed_closest$chr_A)) > 1){
+    out_tbl <- out_tbl %>%
+      add_row(tibble_row(transcript_name = transcript,
+                         transcript_ID = ref_ID, 
+                         gene_ID = gene,
+                         num_hits = matches,
+                         distance = bed_closest$distance,
+                         status = "diff_chr"))
+    
+  } else {
+    for (i in seq(1:nrow(bed_closest))) {
+      distance <- bed_closest$distance[i]
+      if (distance > 2000){
+        status <- "same_chr_away"
+      } else if (distance > -1) {
+        status <- "same_chr_pervasive"
+      } else {
+        next
+      }
+      out_tbl <- out_tbl %>%
+        add_row(tibble_row(transcript_name = transcript,
+                           transcript_ID = ref_ID,
+                           gene_ID = gene,
+                           num_hits = matches,
+                           distance = distance,
+                           status = status))
+    }
+  }
+  return(out_tbl)
+}
+```
+
+
+```{r class_per_trans}
+for (trn in more_hits){
+  # Create "per gene" combination (combinations.py)
+  to_comb <- as.list(merge_tbl[merge_tbl$seqid == more_hits[1],]$ref_gene_ID)
+  to_comb <- lapply(to_comb, function(x) strsplit(x, ";")[[1]])
+  combinations <- expand.grid(to_comb)
+
+  
+  # If more than 200 combinations
+  if (nrow(combinations) > 200) {
+    out_tbl <- out_tbl %>%
+       add_row(tibble_row(transcript_name = trn,
+                           # Use trinity results to avoid multiple FBtr?
+                           transcript_ID = paste(in_tbl[in_tbl$qseqid == trn,]$sseqid, collapse = ";"), 
+                           gene_ID = "problem",
+                           num_hits = length(to_comb),
+                           distance = NA,
+                           status = "too_many_combinations"))
+  } else if (ncol(combinations) == 2) {
+    comb_tbl <- tibble(transcript_name = character(),
+                    transcript_ID = character(),
+                    gene_ID = character(),
+                    num_hits = numeric(),
+                    distance = numeric(),
+                    status = character())
+    for (row in nrow(combinations)){
+  
+    # Retrieve genes and filter GTF
+    genes <- combinations[row,]
+    gtf_filt <- in_gtf[in_gtf$gene_id %in% genes]
+  
+    # Create pseudo-BED file
+    bed_file <- as.data.frame(gtf_filt) %>%
+      select(seqnames, start, end, gene_id, score, strand) %>%
+      mutate(across(score, as.character)) %>%
+      mutate_if(is.character, ~replace(., is.na(.), "·")) %>%
+      arrange(seqnames, start)
+    
+      tmp_tbl <- per_comb_bt_closest(transcript = trn,
+                                      bed_file = bed_file, 
+                                      in_tbl = in_tbl[in_tbl$qseqid == trn,],
+                                      out_tbl = tmp_tbl)
+      comb_tbl <- rbind(out_tbl, tmp_tbl)
+    }
+    # eval comb_tbl
+  } else {
+      
+  }
+}
+bed_file
+combinations[1,]
+```
+
