@@ -1,0 +1,48 @@
+
+from pathlib import Path
+
+IN_DIR_DATA = Path(config["test_data"])
+OUT_DIR_PREPRO = Path(config["prepro"])
+OUT_DIR_ANNO = Path(config["anno"])
+OUT_DIR_IND = Path(config["guided"])
+OUT_DIR_MAP = Path(config["guided_map"])
+OUT_DIR_IMP = Path(config["guided_improved"])
+OUT_DIR_TRI = Path(config["deNovo"])
+LOG_DIR = Path(config["local_log"])
+ENV_DIR = Path(f"{workflow.basedir}/envs")
+
+include: "common.smk"
+
+###############################################################################
+### REQUIREMENTS
+###############################################################################
+#	- Need to have a .txt file with a column having the names of all the samples
+#   - Need to have all the data to analyze in the data folder
+
+# Store the values of all the samples
+with open("sample_list.txt", "r") as f:
+    SAMPLES = [line.split('\t')[0].strip() for line in f]
+# Store the strain of all the samples
+with open("sample_list.txt", "r") as f:    
+    STRAIN = [line.split('\t')[1].strip() for line in f]
+# Store the tissue of all the samples
+with open("sample_list.txt", "r") as f:
+    TISSUE = [line.split('\t')[2].strip() for line in f]
+
+
+# In order to do the wildcard of sample
+rule all:
+    input:
+        expand("fastp/{sample}_trim_1.fq.gz", sample=SAMPLES),
+        expand("fastp/{sample}_trim_2.fq.gz", sample=SAMPLES),
+        expand("report_fastp/{sample}/{sample}.html", sample=SAMPLES),
+        expand("report_fastp/{sample}/{sample}.json", sample=SAMPLES),
+        OUT_DIR_ANNO / "reference.ss",
+        OUT_DIR_ANNO / "reference.exon",
+        expand( OUT_DIR_IND / "reference.{num}.ht2", num = [1,2,3,4,5,6,7,8]),
+        expand(OUT_DIR_MAP / "{strain}/{tissue}/{sample}.sam", tissue = TISSUE, strain = STRAIN, sample = SAMPLES),
+        expand(OUT_DIR_MAP / "{strain}/{tissue}/{sample}.bam", tissue = TISSUE, strain = STRAIN, sample = SAMPLES),
+        expand(OUT_DIR_IMP / "{strain}/{tissue}/{sample}.gtf", tissue = TISSUE, strain = STRAIN, sample = SAMPLES),
+        OUT_DIR_IMP / "stringtie_merged.gtf",
+        OUT_DIR_IMP / "mergedSamples/mergedSamples",
+        OUT_DIR_IMP / "stringtie_merged.fasta",
