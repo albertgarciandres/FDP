@@ -1,0 +1,145 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Configuration schema",
+    "required": ["samples", "ref_genome", "ref_anno", "te_lib"],
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+        "samples":{
+            "type": "string",
+            "description": "Path to the samples table."
+        },
+        "ref_genome":{
+            "type": "string",
+            "description": "Path to the reference genome file."
+        },
+        "ref_anno":{
+            "type" : "string",
+            "description": "Path to the reference gene annotation GTF file."
+        },
+        "te_lib":{
+            "type": "string",
+            "description": "Path to the FASTA TE library."
+        },
+        "out_dir":{
+            "type": "string",
+            "default": "results/",
+            "description": "Path to the output directory."
+        },
+        "local_log":{
+            "type": "string",
+            "default": "logs/local/",
+            "description": "Path to the local log directory."
+        },
+        "cluster_log":{
+            "type": "string",
+            "default": "logs/cluster/",
+            "description": "Path to the cluster log directory."
+        },
+        "scripts_dir":{
+            "type": "string",
+            "default": "../scripts/",
+            "description": "Path to the scripts directory."
+        },
+        "stats_dir":{
+            "type": "string",
+            "default": "results/stats",
+            "description": "Path to the statistics directory."
+        },
+        "get_stats":{
+            "type": "integer",
+            "default": 0,
+            "description": "Retrieve additional information of the workflow."
+        },
+        "min_read_cov":{
+            "type": "number",
+            "default": 1.5,
+            "description": "Minimum read coverage for predicted transcripts to be kept."
+        },
+        "min_gap":{
+            "type": "integer",
+            "default": 51,
+            "description": "Minimum locus gap allowed between read mappings-"
+        },
+        "min_iso_abundance":{
+            "type": "number",
+            "default": 0.016,
+            "description": "Minimum isoform abundance as a fraction of the most abundant assembled transcript."
+        },
+        "min_spliced_reads":{
+            "type": "integer",
+            "default": 2,
+            "description": "Minimum spliced reads that align across a junction."
+        },
+        "min_bp_around":{
+            "type": "integer",
+            "default": 15,
+            "description": "Minimum number of bases (on both sides) spliced reads align with across a junction."
+        },
+        "max_multimappers":{
+            "type": "number",
+            "default": 0.95,
+            "description": "Maximum fraction of multiple-location-mapped reads at a given locus allowed."
+        },
+        "min_fpkm":{
+            "type": "integer",
+            "default": 0,
+            "description": "Minimum input transcript Fragments Per Kilobase of transcript per Million mapped reads (FPKM)."
+        },
+        "min_tpm":{
+            "type": "integer",
+            "default": 10,
+            "description": "Minimum input transcript Transcipt Per kilobase Million."
+        },
+        "e_val_assembly":{
+            "type": "number",
+            "default": 1e-20,
+            "description": "Minimum expected value (E) for saving hits."
+        },
+        "e_val_chimerics":{
+            "type": "number",
+            "default": 1e-20,
+            "description": "Minimum expected value (E) for saving hits."
+        },
+        "max_target_seqs":{
+            "type": "integer",
+            "default": 1, 
+            "description": "Maximum number of aligned sequences to keep."
+        },
+        "curoff":{
+            "type": "integer",
+            "default": 250, 
+            "description": "Maximum number of aligned sequences to keep."
+        },
+        "match_wright":{
+            "type": "integer",
+            "default": 2, 
+            "description": "Match weight in Smith-Waterman style local alignment."
+        },
+        "mm_weigth":{
+            "type": "integer",
+            "default": 3, 
+            "description": "Mismatch weight in Smith-Waterman style local alignment."
+        },
+        "indel_weight":{
+            "type": "integer",
+            "default": 5,
+            "description": "InDel weight in Smith-Waterman style local alignment."
+        },
+        "PM":{
+            "type": "integer",
+            "default": 80,
+            "description": "Match probability."
+        },
+        "PI":{
+            "type": "integer",
+            "default": 10,
+            "description": "InDel probability."
+        },
+        "min_score":{
+            "type": "integer",
+            "default": 20,
+            "description": "Minimum alignment score to report a tandem repeat alignment."
+        }
+    }
+}
